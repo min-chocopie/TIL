@@ -3,7 +3,13 @@
 
 <h2>Network Driver</h2>
 도커에서는 네트워킹을 위해 가상 네트워크 인터페이스를 생성하고 설정하는 여러 가지 네트워크 드라이버를 제공한다. <br>
-어느 드라이버를 사용하느냐에 따라 컨테이너가 어떤 방식으로 네트워크에 연결될지 결정된다.
+어느 드라이버를 사용하느냐에 따라 컨테이너가 어떤 방식으로 네트워크에 연결될지 결정된다. <br><br>
+
+| 네트워크 모드 | 설명 | IP주소 할당 | 컨테이너간 통신 | 외부 통신 |
+|------------|----|-----------|-------------|---------|
+| bridge | 가상 네트워크 사용 | ✅ 있음 | ✅ 가능 (같은 네트워크 내) | ✅ 가능 (NAT 사용) |
+| host | 호스트 네트워크 공유 | ❌ 없음 |  | ✅ 가능 |
+| none | 네트워크 없음 | ❌ 없음 | ❌ 불가능 | ❌ 불가능 |
 
 <h2>bridge</h2>
 bridge는 도커의 기본 네트워크 드라이버로 <b>같은 브리지 네트워크에 연결된 컨테이너들 간의 통신</b>을 가능하게 한다.<br>
@@ -163,4 +169,125 @@ PING 172.17.0.2 (172.17.0.2): 56 data bytes
 
 --- 172.17.0.2 ping statistics ---
 3 packets transmitted, 0 packets received, 100% packet loss
+```
+
+<h2>host</h2>
+host는 컨테이너가 호스트의 네트워크 스택을 그대로 사용하는 방식이다. <br>
+bridge 처럼 별도의 가상 네트워크를 만들지 않고 호스트 네트워크의 인터페이스를 직접 사용하기 때문에 컨테이너에 별도의 IP가 할당되지 않고 포트로 구분하게 된다. <br><br>
+
+`docker network inspect` 명령어를 통해 호스트 네트워크를 확인해보면 bridge와 달리 별도의 서브넷이나 게이트웨이가 설정되지 않는 것을 볼 수 있다. <br>
+또한 호스트 네트워크를 사용하는 컨테이너에도 IP 주소가 할당되지 않는다. <br>
+
+```bash
+$ docker run -d --network host --name nginx nginx              
+b684d7302d7eeff3ee15ad2146f68716046f9e982108e6697a488ec754813318
+
+$ docker network inspect da4b73de334b              
+[
+  {
+    "Name": "host",
+    "Scope": "local",
+    "Driver": "host",
+    "IPAM": {
+      "Config": null # 브리지 네트워크처럼 Subnet이나 Gateway가 별도로 설정되지 않음
+    },
+    "Containers": {
+      "0e4a98bfa22fda1bcbac57bad63109fedc7bd3eba95248a4b4cce5f47f9fda07": {
+        "Name": "nginx",
+        "EndpointID": "5e12e78d59f7923c814f51e8fd88b22815620cb385d85d051f7e86438dd7f295",
+        "MacAddress": "",
+        "IPv4Address": "",
+        "IPv6Address": ""
+      }
+    },
+  }
+]
+
+$ docker inspect nginx --format '{{ .NetworkSettings.IPAddress }}'
+# 빈칸 출력 -> 컨테이너에 IP가 할당되지 않음을 뜻함
+```
+
+<h3>host 네트워크 모드에서의 포트</h3>
+
+앞서 살펴본 브리지 네트워크에서는 컨테이너마다 고유한 IP 주소가 할당되고 `docker run -p` 를 통해 컨테이너 포트를 호스트 포트와 매핑해줘야 했다.
+```bash
+# 컨테이너 내부에서는 80포트를 사용하고 호스트에서 8080으로 접근할 수 있도록 포트 매핑
+$ docker run -d -p 8080:80 --name bridge-nginx nginx
+163239f66e3f425de336c3ab173934f1cfbc8a12c56d546207542edcd5fa5c50
+
+# PORTS 부분을 보면 포트가 매핑되어 있는 것을 볼 수 있음                              
+$ docker ps
+CONTAINER ID   IMAGE     COMMAND                  CREATED         STATUS         PORTS                  NAMES
+163239f66e3f   nginx     "/docker-entrypoint.…"   2 seconds ago   Up 2 seconds   0.0.0.0:8080->80/tcp   bridge-nginx
+
+$ curl localhost:8080
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+...
+```
+
+그러나 호스트 네트워크에서는 컨테이너가 호스트와 동일한 네트워크 환경을 사용해 호스트의 포트를 직접 사용하므로 `-p` 옵션으로 매핑하지 않아도 된다.
+```bash
+$ docker run -d --network host --name nginx nginx
+
+# PORTS를 보면 포트가 매핑되어 있지 않음
+$ docker ps
+docker ps
+CONTAINER ID   IMAGE     COMMAND                  CREATED          STATUS          PORTS                  NAMES
+160a8cf31f52   nginx     "/docker-entrypoint.…"   10 minutes ago   Up 10 minutes                          nginx
+```
+
+그러나 호스트 네트워크 모드에서는 포트를 통해서 컨테이너를 구분하기 때문에 같은 포트를 사용하는 컨테이너는 동시에 실행될 수 없다. <br>
+앞에서 80 포트를 사용하는 nginx 컨테이너를 하나 더 실행하면 어떻게 될까? <br>
+
+```bash
+$ docker run -d --network host --name nginx2 nginx
+
+# docker ps로 확인해보면 실행한 nginx 컨테이너가 바로 종료된 것을 볼 수 있다. 
+$ docker ps -a
+CONTAINER ID   IMAGE     COMMAND                  CREATED          STATUS                     PORTS     NAMES
+632e793100ed   nginx     "/docker-entrypoint.…"   12 seconds ago   Exited (1) 9 seconds ago             nginx2
+160a8cf31f52   nginx     "/docker-entrypoint.…"   13 minutes ago   Up 13 minutes                        nginx
+
+$ docker logs 632e793100ed
+nginx: [emerg] bind() to [::]:80 failed (98: Address already in use)
+2025/02/22 12:12:47 [notice] 1#1: try again to bind() after 500ms
+2025/02/22 12:12:47 [emerg] 1#1: still could not bind()
+nginx: [emerg] still could not bind()
+```
+
+컨테이너가 실행되지 않고 바로 종료되는 것을 볼 수 있다. 로그를 확인해보면 `Address already in use` 라는 에러를 뱉는 것을 볼 수 있다.
+
+<h3>브리지 네트워크와 호스트 네트워크 컨테이너 간 통신</h3>
+
+그럼 브리지 네트워크를 사용하는 컨테이너와 호스트 컨테이너를 사용하는 컨테이너는 서로 통신할 수 있을까? <br>
+테스트를 위해 브리지 네트워크를 사용하는 컨테이너를 배포한 후 bridge -> host로 통신해보면 호스트 IP 주소를 통해 접근이 가능한 것을 볼 수 있다. 
+
+```bash
+# bridge 네트워크에서 컨테이너 실행
+$ docker run -it --rm alpine sh
+
+# 컨테이너 내에서 host의 IP 주소를 이용해 컨테이너에 접근시 nginx의 HTML이 출력됨
+> wget -qO- http://$(hostname -I | awk '{print $1}'):80
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+...
+```
+
+<h2>none</h2>
+none의 경우 이름 그대로 컨테이너에 네트워크 인터페이스를 할당하지 않는 모드이다. <br>
+컨테이너가 외부와 네트워크 통신을 하지 않도록 완전히 차단되며 당연하게 IP 주소가 할당되지 않는다. <br>
+완전히 독립된 환경에서 실행해야 하는 컨테이너에 적합한 모드이다. <br><br>
+
+테스트를 위해 none 네트워크 모드로 컨테이너를 실행 후 ping 테스트를 진행하면 `Network unreachable`이라는 메세지가 뜨며 불가능한 것을 볼 수 있다.
+
+```bash
+# none 네트워크 모드로 컨테이너를 실행 후 ping 테스트 진행시 불가능한 것 확인 가능
+docker run --rm --network none alpine ping -c 3 8.8.8.8
+PING 8.8.8.8 (8.8.8.8): 56 data bytes
+ping: sendto: Network unreachable
 ```
